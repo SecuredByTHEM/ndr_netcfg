@@ -19,6 +19,8 @@
 import unittest
 import os
 
+import ndr_netcfg
+
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class NetworkConfig(unittest.TestCase):
@@ -26,4 +28,5 @@ class NetworkConfig(unittest.TestCase):
 
     def placeholder(self):
         '''Currently a placeholder test until I write the read things'''
-        pass
+        netcfg = ndr_netcfg.NetworkConfig('nonexistant')
+
