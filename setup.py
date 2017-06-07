@@ -29,8 +29,8 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'ndr-network-config = ndr_netcfg.tools.shell:main',
-            'ndr-network-apply = ndr_netcfg.tools.netconfig:main'
+            'ndr-network-config = ndr_netcfg.tools.netconfig:main',
+            'ndr-network-apply = ndr_netcfg.tools.apply:main'
         ]
     },
     test_suite="tests"
