@@ -17,10 +17,13 @@
 # along with NDR.  If not, see <http://www.gnu.org/licenses/>.
 
 import sys
+import os
 import argparse
 import ipaddress
+import subprocess
 import shlex
 
+import yaml
 from pyroute2 import IPRoute
 
 class NetworkConfiguration(object):
@@ -32,10 +35,14 @@ class NetworkConfiguration(object):
         self.netlink = IPRoute()
         self.raw_ifaces = None
         self.ifaces = {}
+
         # Refers to the configuration that we want
         self.nic_configuration = {}
-
         self.refresh()
+
+        # If the config file exists, load it
+        if os.path.isfile(self.config):
+            self.import_configuration()
 
     def refresh(self):
         '''Refreshes the iface table'''
@@ -60,7 +67,6 @@ class NetworkConfiguration(object):
 
                 # We probably need to get more info here in the future
                 iface['ip_addresses'].append(ip_addresses)
-
             self.ifaces[name] = iface
 
     def print_interfaces(self):
@@ -103,6 +109,8 @@ class NetworkConfiguration(object):
 
         if mac_address not in self.nic_configuration:
             self.nic_configuration[mac_address] = {}
+            self.nic_configuration[mac_address]['monitor'] = False
+            self.nic_configuration[mac_address]['method'] = "dhcp" # Default to DHCP configuration
 
         return self.nic_configuration[mac_address]
 
@@ -115,7 +123,7 @@ class NetworkConfiguration(object):
         nic = self.get_nic_config(self.ifaces[old_name]['mac_address'])
         nic['name'] = new_name
 
-    def apply_configuration(self):
+    def apply_configuration(self, oneshot=False):
         '''Applies the configuration from the network dict'''
 
         for nic, values in self.nic_configuration.items():
@@ -130,6 +138,37 @@ class NetworkConfiguration(object):
                 self.netlink.link(
                     'set', index=iface['index'], ifname=values['name'])
                 self.netlink.link('set', index=iface['index'], state='up')
+
+            # Bring up the interface if we're not a monitor port
+            if values['method'] == 'dhcp':
+                dhcpcd_cmdline = ['dhcpcd', '-w']
+
+                # If we're a oneshot, invoke dhcpcd as a oneshot
+                if oneshot is True:
+                    dhcpcd_cmdline += ['-1']
+
+                print("Configuring DHCP on", values['name'])
+                dhcpcd_process = subprocess.run(
+                    args=dhcpcd_cmdline, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    check=False)
+
+                # This should rarely if ever happen. If we don't have a DHCP server handy, we'll
+                # end up with a link local access and the client should return. This will only happen
+                # if IPv4LL fails
+
+                if dhcpcd_process.returncode != 0:
+                    print("failed to recieve an IP address!")
+                    return False
+                return True
+
+    def import_configuration(self):
+        with open(self.config, 'r') as f:
+            self.nic_configuration = yaml.safe_load(f.read())
+
+    def export_configuration(self):
+        cfg_yaml = yaml.dump(self.nic_configuration)
+        with open(self.config, 'w') as f:
+            f.write(cfg_yaml)
 
     def interactive_configuration(self):
         '''Interactively reconfigures the network'''
@@ -183,10 +222,14 @@ class NetworkConfiguration(object):
                 if args.command == 'commit':
                     # self.write_configuration()
                     self.apply_configuration()
+                    self.export_configuration()
 
                 if args.command == 'set':
                     # Set a configuration variable
                     pass
+
+                if args.command == 'done':
+                    done = True
 
                 if args.command == 'help':
                     print()

@@ -14,6 +14,8 @@
 # You should have received a copy of the GNU General Public License
 # along with NDR.  If not, see <http://www.gnu.org/licenses/>.
 
+import os
+
 import argparse
 import ndr_netcfg
 
@@ -24,10 +26,17 @@ def main():
     parser.add_argument('-c', '--config',
                         default='/persistant/etc/ndr/network_config.yml',
                         help='Network Configuration File')
+    parser.add_argument('--oneshot',
+                        action='store_true',
+                        help='Only configures the network once, instead of running helper daemons')
     args = parser.parse_args()
 
+    if os.getuid() != 0:
+        print("ERROR: must be run as root")
+        return
+
     net_config = ndr_netcfg.NetworkConfiguration(args.config)
-    net_config.apply_configuration()
+    net_config.apply_configuration(oneshot=args.oneshot)
 
 if __name__ == "__main__":
     main()
