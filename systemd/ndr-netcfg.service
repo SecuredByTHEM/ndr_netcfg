@@ -1,0 +1,10 @@
+[Unit]
+Description=NDR Network
+Before=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ndr-network-apply
+Type=oneshot
+
+[Install]
+WantedBy=multi-user.target
