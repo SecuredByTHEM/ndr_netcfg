@@ -19,6 +19,9 @@
 import unittest
 import os
 
+import netifaces
+from pyroute2 import IPRoute
+
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
