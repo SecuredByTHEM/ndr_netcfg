@@ -27,6 +27,9 @@ import ndr_netcfg
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
+LAN_MAC_ADDRESS="00:11:22:33:44:55"
+MONITOR_MAC_ADDRESS="00:44:33:22:11:55"
+
 @unittest.skipIf(os.getuid() != 0, "must be root")
 class NetworkConfig(unittest.TestCase):
     '''Tests the functionality of the network configurer'''
@@ -48,6 +51,16 @@ class NetworkConfig(unittest.TestCase):
         self._iproute.link('remove', index=self._dummy1_idx)
 
         self._iproute.close()
+
+    def set_mac_addresses(self):
+        # Some tests need the MAC addresses standardized, other's dont
+        self._iproute.link('set',
+                           index=self._dummy0_idx,
+                           address=LAN_MAC_ADDRESS)
+
+        self._iproute.link('set',
+                           index=self._dummy1_idx,
+                           address=MONITOR_MAC_ADDRESS)
 
     def configure_interfaces(self, config_file="/dev/null"):
         '''Sets up interfaces for most tests'''
@@ -82,6 +95,7 @@ class NetworkConfig(unittest.TestCase):
             os.close(fd) # Don't need to write anything to it
 
             # First we need to setup the configuration instances
+            self.set_mac_addresses()
             nc = self.configure_interfaces(scratch_config)
 
             # And write it out to the YAML file
@@ -103,9 +117,9 @@ class NetworkConfig(unittest.TestCase):
 
                 for interface in interfaces:
                     if interface['name'] == 'lan127':
-                        # Confirm the lan127 interface is set properly. MAC addresses are
-                        # randomized so we can't compare them directly.
-                        self.assertTrue(interface['method'], 'static')
+                        # Confirm the lan127 interface is set properly. 
+                        self.assertEqual(interface['method'], 'static')
+                        self.assertEqual(interface['mac_address'], LAN_MAC_ADDRESS)
                         matched_lan127 = True
 
                     # And again for monitor234
@@ -113,6 +127,7 @@ class NetworkConfig(unittest.TestCase):
                         # Confirm the lan127 interface is set properly. MAC addresses are
                         # randomized so we can't compare them directly.
                         self.assertTrue(interface['method'], 'static')
+                        self.assertEqual(interface['mac_address'], MONITOR_MAC_ADDRESS)
                         matched_monitor234 = True
 
                 # Make sure we got both things
