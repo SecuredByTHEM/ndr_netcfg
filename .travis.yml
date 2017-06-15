@@ -12,7 +12,7 @@ install:
   - pip install netifaces
 
 script:
-  - coverage run --source=ndr_netcfg setup.py test
+  - sudo coverage run --source=ndr_netcfg setup.py test
 
 after_success:
   - codecov
