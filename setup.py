@@ -27,6 +27,9 @@ setup(
         'pyyaml',
         'pyroute2'
     ],
+    tests_require={
+        'netifaces'
+    },
     entry_points={
         'console_scripts': [
             'ndr-network-config = ndr_netcfg.tools.netconfig:main',

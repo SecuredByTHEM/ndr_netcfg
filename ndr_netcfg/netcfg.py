@@ -26,12 +26,14 @@ import shlex
 import yaml
 from pyroute2 import IPRoute
 
+CFG_METHODS = ['static', 'dhcp']
+
 class NetworkConfiguration(object):
 
     '''Holds configuration information for NDR'''
 
-    def __init__(self, ndr_config):
-        self.config = ndr_config
+    def __init__(self, ndr_netcfg_config):
+        self.config = ndr_netcfg_config
         self.netlink = IPRoute()
         self.raw_ifaces = None
         self.ifaces = {}
@@ -114,6 +116,26 @@ class NetworkConfiguration(object):
 
         return self.nic_configuration[mac_address]
 
+    def get_nic_config_by_name(self, name):
+        '''Retrieves the NIC configuration by interface name.abs
+
+        If its not found, an error is raised as this should only be used for managed
+        interfaces'''
+
+        for mac, values in self.nic_configuration.items():
+            if values['name'] == name:
+                return self.nic_configuration[mac]
+
+        raise ValueError("Interface not found")
+
+    def set_configuration_method(self, interface, method):
+        '''Configures how an interface is configured'''
+        if method not in CFG_METHODS:
+            raise ValueError("Unknown configuration method")
+
+        cfg = self.get_nic_config_by_name(interface)
+        cfg['method'] = method
+
     def rename_interface(self, old_name, new_name):
         '''Updates the configuration dict to the interface name'''
 
@@ -160,6 +182,9 @@ class NetworkConfiguration(object):
                     print("failed to recieve an IP address!")
                     return False
                 return True
+
+            if values['method'] == 'static':
+                pass                    
 
     def import_configuration(self):
         with open(self.config, 'r') as f:
