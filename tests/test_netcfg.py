@@ -22,6 +22,7 @@ import os
 import netifaces
 from pyroute2 import IPRoute
 
+import ndr_netcfg
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 

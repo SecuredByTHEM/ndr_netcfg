@@ -11,7 +11,7 @@ install:
   - sudo pip install coverage
 
 script:
-  - sudo coverage run --source=ndr_netcfg ./setup.py test
+  - sudo PYTHONPATH=. coverage run --source=ndr_netcfg ./setup.py test
 
 after_success:
   - sudo codecov
