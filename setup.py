@@ -27,7 +27,7 @@ setup(
         'pyyaml',
         'pyroute2'
     ],
-    test_requires={
+    tests_require={
         'netifaces'
     },
     entry_points={
