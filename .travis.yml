@@ -7,12 +7,12 @@ python:
   - 3.5
 
 install:
-  - pip install codecov
-  - pip install coverage
+  - sudo pip install codecov
+  - sudo pip install coverage
 
 script:
   - sudo coverage run --source=ndr_netcfg ./setup.py test
 
 after_success:
-  - codecov
+  - sudo codecov
 
