@@ -100,7 +100,7 @@ class InterfaceConfiguration(object):
             netlink.link('set', index=index, state='up')
 
         # Bring up the interface if we're not a monitor port
-        if self.method == 'dhcp':
+        if self.method == InterfaceConfigurationMethods.DHCP:
             dhcpcd_cmdline = ['dhcpcd', '-w']
 
             # If we're a oneshot, invoke dhcpcd as a oneshot
@@ -122,7 +122,7 @@ class InterfaceConfiguration(object):
             return True
 
         if self.method == InterfaceConfigurationMethods.STATIC:
-            if self.static_ipv4_addrs.count() == 0:
+            if len(self.static_ipv4_addrs) == 0:
                 raise ValueError("Static configuration, but no addresses set!")
 
 
@@ -137,6 +137,25 @@ class InterfaceConfiguration(object):
 
         netlink.close()
 
+    def to_dict(self):
+        '''Stored configuration data to dictionary form'''
+        interface_dict = {}
+        interface_dict['name'] = self.name
+        interface_dict['mac_address'] = self.mac_address
+        interface_dict['method'] = self.method.value
+
+        # MAC addresses aren't technically configurable, but we cna use them as a relative 
+        # simple UUID to identify each interface and help for matching on the next bringup
+        interface_dict['mac_address'] = self.mac_address
+        return interface_dict
+
+    def from_dict(self, interface_dict):
+        '''Restores configuration data from dictionary form'''
+
+        # An interface is considered managed if we load it from a dict
+        self.managed = True
+        self.name = interface_dict['name']
+        self.method = InterfaceConfigurationMethods(interface_dict['method'])
 
 class NetworkConfiguration(object):
 
@@ -183,24 +202,21 @@ class NetworkConfiguration(object):
         '''Dumps the network interfaces to stdout'''
         print("\n=== Linux Network Configuration ===")
 
-        for name, values in self.ifaces.items():
-            print("\nInterface:", name)
-            print("State:", values['state'])
-            print("MAC Address:", values['mac_address'])
+        for interface in self.nic_configuration:
+            print("\nInterface:", interface.current_name)
+            print("State:", interface.state)
+            print("MAC Address:", interface.mac_address)
 
             # Only print addresses if we have them
-            if values['state'] != 'DOWN':
+            if interface.state != 'DOWN':
                 print("Addresses:")
-                for addr in values['ip_addresses']:
+                for addr in interface.current_ip_addresses:
                     print("  ", addr.compressed)
 
-            # Check if we know about this interface
-            if values['mac_address'] in self.nic_configuration:
-                our_cfg = self.nic_configuration[values['mac_address']]
-
+            if interface.managed is True:
                 print("Interface is configured. Settings applied at commit:")
-                if our_cfg['name'] != name:
-                    print("  Rename to:", our_cfg['name'])
+                if interface.current_name != interface.name:
+                    print("  Rename to:", interface.name)
             else:
                 print("Interface is NOT configured for NDR")
 
@@ -251,14 +267,29 @@ class NetworkConfiguration(object):
             if nic.managed == True:
                 nic.apply_configuration()
 
+    def to_yaml(self):
+        '''Exports configuration information as a YAML file'''
+        cfg_dict = {}
+        interface_dicts = []
+
+        for interface in self.nic_configuration:
+            if interface.managed is True:
+                interface_dicts.append(
+                    interface.to_dict()
+                )
+
+        cfg_dict['interfaces'] = interface_dicts
+
+        return yaml.dump(cfg_dict)
+
+    def export_configuration(self):
+        '''Exports configuration information revelant to restore state'''
+        with open(self.config, 'w') as f:
+            f.write(self.to_yaml())
+
     def import_configuration(self):
         with open(self.config, 'r') as f:
             self.nic_configuration = yaml.safe_load(f.read())
-
-    def export_configuration(self):
-        cfg_yaml = yaml.dump(self.nic_configuration)
-        with open(self.config, 'w') as f:
-            f.write(cfg_yaml)
 
     def interactive_configuration(self):
         '''Interactively reconfigures the network'''
