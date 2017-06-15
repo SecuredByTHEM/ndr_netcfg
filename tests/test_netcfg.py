@@ -54,10 +54,13 @@ class NetworkConfig(unittest.TestCase):
         nc = ndr_netcfg.NetworkConfiguration("/dev/null")
         nc.rename_interface("dummy0", "lan127")
         nc.set_configuration_method("lan127", "static")
+        nc.add_v4_addr("lan127", "10.1.177.2", 24, "10.1.177.255")
 
         nc.rename_interface("dummy1", "monitor234")
         nc.set_configuration_method("monitor234", "static")
+        nc.add_v4_addr("monitor234", "10.2.177.2", 24, "10.2.177.255")
 
         nc.apply_configuration()
 
         print(netifaces.interfaces())
+        print(netifaces.ifaddresses("lan127"))

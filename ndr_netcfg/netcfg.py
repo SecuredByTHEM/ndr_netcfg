@@ -136,6 +136,19 @@ class NetworkConfiguration(object):
         cfg = self.get_nic_config_by_name(interface)
         cfg['method'] = method
 
+    def add_v4_addr(self, interface, address, cidr, broadcast):
+        '''Add an address to an interface. Static configuration only'''
+        cfg = self.get_nic_config_by_name(interface)
+
+        if 'v4_addrs' not in cfg:
+            cfg['v4_addrs'] = []
+
+        cfg['v4_addrs'].append({
+            'address': address,
+            'cidr': cidr,
+            'broadcast': broadcast
+        })
+
     def rename_interface(self, old_name, new_name):
         '''Updates the configuration dict to the interface name'''
 
@@ -175,8 +188,8 @@ class NetworkConfiguration(object):
                     check=False)
 
                 # This should rarely if ever happen. If we don't have a DHCP server handy, we'll
-                # end up with a link local access and the client should return. This will only happen
-                # if IPv4LL fails
+                # end up with a link local access and the client should return. This will only 
+                # happen if IPv4LL fails
 
                 if dhcpcd_process.returncode != 0:
                     print("failed to recieve an IP address!")
@@ -184,7 +197,24 @@ class NetworkConfiguration(object):
                 return True
 
             if values['method'] == 'static':
-                pass                    
+                if 'v4_addrs' not in values:
+                    raise ValueError("Static configuration, but no addresses set!")
+
+
+                for addr in values['v4_addrs']:
+                    # Convert addr to an IP address object. This validates them
+                    ip_addr = ipaddress.ip_address(addr['address'])
+                    broadcast_addr = ipaddress.ip_address(addr['broadcast'])
+
+                    # This isn't correct for IPv4 networks that !
+                    if ip_addr.version == 4:
+                        self.netlink.addr(
+                            'add',
+                            index=iface['index'],
+                            address=ip_addr.compressed,
+                            broadcast=broadcast_addr.compressed,
+                            prefixlen=int(addr['cidr'])
+                        )
 
     def import_configuration(self):
         with open(self.config, 'r') as f:
