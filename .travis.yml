@@ -14,5 +14,5 @@ script:
   - sudo /bin/bash -c "source ~/virtualenv/python3.5/bin/activate && python -m coverage run --source=ndr_netcfg ./setup.py test"
 
 after_success:
-  - sudo codecov
+  - codecov
 
