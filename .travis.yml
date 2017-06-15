@@ -7,11 +7,11 @@ python:
   - 3.5
 
 install:
-  - sudo pip install codecov
-  - sudo pip install coverage
+  - pip install codecov
+  - pip install coverage
 
 script:
-  - sudo PYTHONPATH=. python3 -m coverage run --source=ndr_netcfg ./setup.py test
+  - sudo /bin/bash -c "source ~/virtualenv/python3.5/bin/activate && python -m coverage run --source=ndr_netcfg ./setup.py test"
 
 after_success:
   - sudo codecov
