@@ -9,6 +9,8 @@ python:
 install:
   - sudo pip install codecov
   - sudo pip install coverage
+  # Required to get the tests to work
+  - sudo ./setup.py install
 
 script:
   - sudo PYTHONPATH=. coverage run --source=ndr_netcfg ./setup.py test
