@@ -163,7 +163,6 @@ class NetworkConfiguration(object):
 
     def __init__(self, ndr_netcfg_config):
         self.config = ndr_netcfg_config
-        self.netlink = IPRoute()
         self.raw_ifaces = None
 
         # Refers to the configuration that we want
@@ -189,8 +188,12 @@ class NetworkConfiguration(object):
                 )
             )
 
+        # We're done with netlink in this context
+        netlink.close()
+
         # Now load all the data from the kernel
         self.refresh_all()
+
 
     def refresh_all(self):
         '''Refreshs all network interfaces'''
@@ -288,8 +291,9 @@ class NetworkConfiguration(object):
             f.write(self.to_yaml())
 
     def import_configuration(self):
-        with open(self.config, 'r') as f:
-            self.nic_configuration = yaml.safe_load(f.read())
+        pass
+        #with open(self.config, 'r') as f:
+            #self.nic_configuration = yaml.safe_load(f.read())
 
     def interactive_configuration(self):
         '''Interactively reconfigures the network'''
