@@ -1,5 +1,5 @@
 dist: trusty
-sudo: false
+sudo: required
 
 language: python
 
@@ -9,6 +9,7 @@ python:
 install:
   - pip install codecov
   - pip install coverage
+  - pip install netifaces
 
 script:
   - coverage run --source=ndr_netcfg setup.py test

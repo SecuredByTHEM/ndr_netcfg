@@ -19,14 +19,46 @@
 import unittest
 import os
 
+import netifaces
+
+from pyroute2 import IPRoute
+
 import ndr_netcfg
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
+@unittest.skipIf(os.getuid() != 0, "must be root")
 class NetworkConfig(unittest.TestCase):
     '''Tests the functionality of the network configurer'''
 
-    def placeholder(self):
-        '''Currently a placeholder test until I write the read things'''
-        netcfg = ndr_netcfg.NetworkConfig('nonexistant')
+    @classmethod
+    def setUpClass(cls):
+        cls._iproute = IPRoute()
 
+        # Unfortunately, when creating dummy interfaces, you'll end up with an
+        # interface named dummyX no matter what you do
+        cls._iproute.link('add', name='dummy0', kind='dummy')
+        cls._iproute.link('add', name='dummy1', kind='dummy')
+
+        cls._dummy0_idx = cls._iproute.link_lookup(ifname='dummy0')[0]
+        cls._dummy1_idx = cls._iproute.link_lookup(ifname='dummy1')[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        # Remove our dummy interfaces
+        cls._iproute.link('remove', index=cls._dummy0_idx)
+        cls._iproute.link('remove', index=cls._dummy1_idx)
+
+        cls._iproute.close()
+
+    def test_renaming_interfaces(self):
+        nc = ndr_netcfg.NetworkConfiguration("/dev/null")
+        nc.rename_interface("dummy0", "lan127")
+        nc.set_configuration_method("lan127", "static")
+
+        nc.rename_interface("dummy1", "monitor234")
+        nc.set_configuration_method("monitor234", "static")
+
+        nc.apply_configuration()
+
+        print(netifaces.interfaces())
