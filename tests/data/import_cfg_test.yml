@@ -1,0 +1,11 @@
+interfaces:
+- mac_address: 00:11:22:33:44:55
+  method: static
+  name: lan127
+  v4_addresses:
+  - {broadcast: 10.1.177.255, ip_addr: 10.1.177.2, prefixlen: 24}
+- mac_address: 00:44:33:22:11:55
+  method: static
+  name: monitor234
+  v4_addresses:
+  - {broadcast: 10.2.177.255, ip_addr: 10.2.177.2, prefixlen: 24}

@@ -26,6 +26,7 @@ from pyroute2 import IPRoute
 import ndr_netcfg
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+IMPORT_CFG_TEST = THIS_DIR + "/data/import_cfg_test.yml"
 
 LAN_MAC_ADDRESS="00:11:22:33:44:55"
 MONITOR_MAC_ADDRESS="00:44:33:22:11:55"
@@ -62,7 +63,7 @@ class NetworkConfig(unittest.TestCase):
                            index=self._dummy1_idx,
                            address=MONITOR_MAC_ADDRESS)
 
-    def configure_interfaces(self, config_file="/dev/null"):
+    def configure_interfaces(self, config_file=None):
         '''Sets up interfaces for most tests'''
 
         nc = ndr_netcfg.NetworkConfiguration(config_file)
@@ -104,7 +105,6 @@ class NetworkConfig(unittest.TestCase):
             # Now we need to read it back as YAML and make sure all the stuff we expect is there
             with open(scratch_config, 'r') as f:
                 yaml_contents = yaml.safe_load(f.read())
-
                 # We should only have one element at the moment, interfaces
                 self.assertEqual(len(yaml_contents), 1)
                 interfaces = yaml_contents['interfaces']
@@ -136,3 +136,18 @@ class NetworkConfig(unittest.TestCase):
 
         finally:
             os.remove(scratch_config)
+
+    def test_import_and_apply_configuration(self):
+        '''Test importing an example configuration and applying it'''
+        self.set_mac_addresses()
+
+
+        nc = ndr_netcfg.NetworkConfiguration(IMPORT_CFG_TEST)
+        nc.apply_configuration()
+
+        # If everything worked as planned, we should successfully be able to get the index numbers
+        # based on the new interface names
+
+        self.assertEqual(self._dummy0_idx, self._iproute.link_lookup(ifname='lan127')[0])
+        self.assertEqual(self._dummy1_idx, self._iproute.link_lookup(ifname='monitor234')[0])
+

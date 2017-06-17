@@ -22,6 +22,8 @@ import argparse
 import ipaddress
 import subprocess
 import shlex
+import logging
+import logging.handlers
 
 from enum import Enum
 import yaml
@@ -39,10 +41,27 @@ class StaticIPv4Address(object):
         self.prefixlen = int(prefixlen)
         self.broadcast = ipaddress.ip_address(broadcast)
 
+    def to_dict(self):
+        '''Prepares an IPv4 address for serialization'''
+        v4_addr_dict = {}
+        v4_addr_dict['ip_addr'] = self.ip_addr.compressed
+        v4_addr_dict['prefixlen'] = self.prefixlen
+        v4_addr_dict['broadcast'] = self.broadcast.compressed
+
+        return v4_addr_dict
+
+    @classmethod
+    def from_dict(cls, v4_addr_dict):
+        '''Creates the Addr object from a dictionary'''
+        return StaticIPv4Address(v4_addr_dict['ip_addr'],
+                                 v4_addr_dict['prefixlen'],
+                                 v4_addr_dict['broadcast'])
+
 class InterfaceConfiguration(object):
     '''Holds information relating to the interfaces configured by ndr-netcfg'''
 
-    def __init__(self, name, mac_address):
+    def __init__(self, logger, name, mac_address):
+        self.logger = logger
         self.name = name
         self.mac_address = mac_address
         self.method = InterfaceConfigurationMethods.NONE
@@ -92,7 +111,7 @@ class InterfaceConfiguration(object):
         index = netlink.link_lookup(ifname=self.current_name)[0]
 
         if self.current_name != self.name:
-            print("Renaming", self.current_name, "to", self.name)
+            self.logger.info("Renaming %s to %s", self.current_name, self.name)
 
             # Interface must be brought down to rename it
             netlink.link('set', index=index, state='down')
@@ -107,7 +126,7 @@ class InterfaceConfiguration(object):
             if oneshot is True:
                 dhcpcd_cmdline += ['-1']
 
-            print("Configuring DHCP on", self.name)
+            self.logger.info("Configuring DHCP on %s", self.name)
             dhcpcd_process = subprocess.run(
                 args=dhcpcd_cmdline, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=False)
@@ -117,7 +136,7 @@ class InterfaceConfiguration(object):
             # happen if IPv4LL fails
 
             if dhcpcd_process.returncode != 0:
-                print("failed to recieve an IP address!")
+                self.logger.error("failed to recieve an IP address!")
                 return False
             return True
 
@@ -141,29 +160,65 @@ class InterfaceConfiguration(object):
         '''Stored configuration data to dictionary form'''
         interface_dict = {}
         interface_dict['name'] = self.name
-        interface_dict['mac_address'] = self.mac_address
         interface_dict['method'] = self.method.value
 
         # MAC addresses aren't technically configurable, but we cna use them as a relative 
         # simple UUID to identify each interface and help for matching on the next bringup
         interface_dict['mac_address'] = self.mac_address
+
+        # If we're statically configured, save our addresses for save/reload
+        v4_addrs = []
+        if self.method == InterfaceConfigurationMethods.STATIC:
+            for static_v4_addr in self.static_ipv4_addrs:
+                v4_addrs.append(static_v4_addr.to_dict())
+
+            interface_dict['v4_addresses'] = v4_addrs
+
         return interface_dict
 
     def from_dict(self, interface_dict):
         '''Restores configuration data from dictionary form'''
+
+        if interface_dict['mac_address'] != self.mac_address:
+            raise ValueError("MAC Address mismatch! Refusing to apply configuration")
 
         # An interface is considered managed if we load it from a dict
         self.managed = True
         self.name = interface_dict['name']
         self.method = InterfaceConfigurationMethods(interface_dict['method'])
 
+        if self.method == InterfaceConfigurationMethods.STATIC:
+            for v4_addrs in interface_dict['v4_addresses']:
+                self.static_ipv4_addrs.append(
+                    StaticIPv4Address.from_dict(v4_addrs)
+                )
+
 class NetworkConfiguration(object):
 
     '''Holds configuration information for NDR'''
 
-    def __init__(self, ndr_netcfg_config):
+    def __init__(self, ndr_netcfg_config, logger=None):
         self.config = ndr_netcfg_config
         self.raw_ifaces = None
+
+        # Log to a logger if one is manually specified, otherwise to syslog by default
+        if logger is not None:
+            self.logger = logger
+        else:
+            # Setup logging ourselves
+            logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s')
+            logger = logging.getLogger(name=__name__)
+            logger.setLevel(logging.DEBUG)
+
+            # If syslog is available, go there by default
+            if os.path.exists("/dev/log"):
+                logger.propagate = False
+
+                handler = logging.handlers.SysLogHandler(address='/dev/log')
+                handler.ident = os.path.basename(sys.argv[0]) + " " # space required for syslog
+                logger.addHandler(handler)
+
+            self.logger = logger
 
         # Refers to the configuration that we want
         self.nic_configuration = []
@@ -171,7 +226,7 @@ class NetworkConfiguration(object):
         self.load_all_interfaces()
 
         # If the config file exists, load it
-        if os.path.isfile(self.config):
+        if self.config != None:
             self.import_configuration()
 
 
@@ -183,6 +238,7 @@ class NetworkConfiguration(object):
         for raw_iface in raw_ifaces:
             self.nic_configuration.append(
                 InterfaceConfiguration(
+                    self.logger,
                     raw_iface.get_attr('IFLA_IFNAME'),
                     raw_iface.get_attr('IFLA_ADDRESS')
                 )
@@ -291,9 +347,18 @@ class NetworkConfiguration(object):
             f.write(self.to_yaml())
 
     def import_configuration(self):
-        pass
-        #with open(self.config, 'r') as f:
-            #self.nic_configuration = yaml.safe_load(f.read())
+        with open(self.config, 'r') as f:
+            nic_dicts = yaml.safe_load(f.read())
+
+        if nic_dicts is not None:
+            if "interfaces" in nic_dicts:
+                managed_nics = nic_dicts['interfaces']
+
+                # For each NIC we have the configuration for, load it, then configure it.
+                for nic in managed_nics:
+                    # See if we can find this NIC
+                    actual_nic = self.get_nic_config_by_mac_address(nic['mac_address'])
+                    actual_nic.from_dict(nic)
 
     def interactive_configuration(self):
         '''Interactively reconfigures the network'''
