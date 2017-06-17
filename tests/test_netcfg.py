@@ -19,6 +19,7 @@
 import unittest
 import os
 import tempfile
+import ipaddress
 
 import yaml
 from pyroute2 import IPRoute
@@ -124,8 +125,6 @@ class NetworkConfig(unittest.TestCase):
 
                     # And again for monitor234
                     if interface['name'] == 'monitor234':
-                        # Confirm the lan127 interface is set properly. MAC addresses are
-                        # randomized so we can't compare them directly.
                         self.assertTrue(interface['method'], 'static')
                         self.assertEqual(interface['mac_address'], MONITOR_MAC_ADDRESS)
                         matched_monitor234 = True
@@ -141,7 +140,6 @@ class NetworkConfig(unittest.TestCase):
         '''Test importing an example configuration and applying it'''
         self.set_mac_addresses()
 
-
         nc = ndr_netcfg.NetworkConfiguration(IMPORT_CFG_TEST)
         nc.apply_configuration()
 
@@ -151,3 +149,19 @@ class NetworkConfig(unittest.TestCase):
         self.assertEqual(self._dummy0_idx, self._iproute.link_lookup(ifname='lan127')[0])
         self.assertEqual(self._dummy1_idx, self._iproute.link_lookup(ifname='monitor234')[0])
 
+    def test_v4_netmask_retrivial(self):
+        '''Confirms that we can properly retrieve v4 netmask and broadcast information'''
+        nc = self.configure_interfaces()
+
+        lan127_interface = nc.get_nic_config_by_name('lan127')
+        self.assertEqual(len(lan127_interface.current_ip_addresses), 1)
+
+        ip_address_block = lan127_interface.current_ip_addresses[0]
+        self.assertEqual(ip_address_block.ip_addr, ipaddress.ip_address("10.1.177.2"))
+        self.assertEqual(ip_address_block.prefixlen, 24)
+        self.assertEqual(ip_address_block.broadcast, ipaddress.ip_address("10.1.177.255"))
+
+    def test_get_all_managed_interfaces(self):
+        '''Makes sure we only return the managed interfaces'''
+        nc = self.configure_interfaces()
+        self.assertEqual(len(nc.get_all_managed_interfaces()), 2)

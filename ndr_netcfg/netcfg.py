@@ -178,7 +178,7 @@ class InterfaceConfiguration(object):
                             #print("Got network match. Interface", self.name, " ", str(rta_dst))
 
                             # Create an IP address object and store it
-                            if nic_ip_address == 4:
+                            if nic_ip_address.version == 4:
                                 ip_obj = IPv4Address(str(nic_ip_address), dst_len, addr.get_attr('IFA_BROADCAST'))
                             else:
                                 ip_obj = IPv6Address(str(nic_ip_address), dst_len)
@@ -371,6 +371,16 @@ class NetworkConfiguration(object):
                     print("  Rename to:", interface.name)
             else:
                 print("Interface is NOT configured for NDR")
+
+    def get_all_managed_interfaces(self):
+        '''Returns a list of all managed interfaces'''
+
+        managed_interfaces = []
+        for interface in self.nic_configuration:
+            if interface.managed is True:
+                managed_interfaces.append(interface)
+        
+        return managed_interfaces
 
     def get_nic_config_by_mac_address(self, mac_address):
         '''Retrieves the NIC configuration based on MAC address,
