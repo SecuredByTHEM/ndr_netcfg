@@ -22,99 +22,273 @@ import argparse
 import ipaddress
 import subprocess
 import shlex
+import logging
+import logging.handlers
 
+from enum import Enum
 import yaml
 from pyroute2 import IPRoute
 
-CFG_METHODS = ['static', 'dhcp']
+class InterfaceConfigurationMethods(Enum):
+    NONE = 'none'
+    DHCP = 'dhcp'
+    STATIC = 'static'
+
+class StaticIPv4Address(object):
+    '''Static IP configuration object'''
+    def __init__(self, ip_addr, prefixlen, broadcast):
+        self.ip_addr = ipaddress.ip_address(ip_addr)
+        self.prefixlen = int(prefixlen)
+        self.broadcast = ipaddress.ip_address(broadcast)
+
+    def to_dict(self):
+        '''Prepares an IPv4 address for serialization'''
+        v4_addr_dict = {}
+        v4_addr_dict['ip_addr'] = self.ip_addr.compressed
+        v4_addr_dict['prefixlen'] = self.prefixlen
+        v4_addr_dict['broadcast'] = self.broadcast.compressed
+
+        return v4_addr_dict
+
+    @classmethod
+    def from_dict(cls, v4_addr_dict):
+        '''Creates the Addr object from a dictionary'''
+        return StaticIPv4Address(v4_addr_dict['ip_addr'],
+                                 v4_addr_dict['prefixlen'],
+                                 v4_addr_dict['broadcast'])
+
+class InterfaceConfiguration(object):
+    '''Holds information relating to the interfaces configured by ndr-netcfg'''
+
+    def __init__(self, logger, name, mac_address):
+        self.logger = logger
+        self.name = name
+        self.mac_address = mac_address
+        self.method = InterfaceConfigurationMethods.NONE
+        self.static_ipv4_addrs = []
+        self.managed = False
+
+        # State information gotten from the kernel
+        self.state = None
+        self.current_name = None
+        self.current_ip_addresses = []
+
+    def refresh(self):
+        '''Gets information about this device from the Linux kernel'''
+        # Open a netlink socket
+        netlink = IPRoute()
+        raw_ifaces = netlink.get_links()
+
+        for raw_iface in raw_ifaces:
+            if raw_iface.get_attr('IFLA_ADDRESS') == self.mac_address:
+                index = raw_iface['index']
+                self.state = raw_iface.get_attr('IFLA_OPERSTATE')
+                self.current_name = raw_iface.get_attr('IFLA_IFNAME')
+                self.mac_address = raw_iface.get_attr('IFLA_ADDRESS')
+
+                # Get the addrs per interface
+                addrs = netlink.get_addr(index=index)
+                for addr in addrs:
+                    ip_addresses = ipaddress.ip_address(
+                        addr.get_attr('IFA_ADDRESS'))
+
+                    # We probably need to get more info here in the future
+                    self.current_ip_addresses.append(ip_addresses)
+
+        # And clean up after ourselves
+        netlink.close()
+
+    def add_static_v4_addr(self, ip_addr, prefixlen, broadcast):
+        '''Adds a static IPv4 address to this interface'''
+        static_addr = StaticIPv4Address(ip_addr, prefixlen, broadcast)
+        self.static_ipv4_addrs.append(static_addr)
+
+    def apply_configuration(self, oneshot=False):
+        if self.managed == False:
+            raise ValueError("Can't apply configuration on unmanaged interface")
+
+        netlink = IPRoute()
+        index = netlink.link_lookup(ifname=self.current_name)[0]
+
+        if self.current_name != self.name:
+            self.logger.info("Renaming %s to %s", self.current_name, self.name)
+
+            # Interface must be brought down to rename it
+            netlink.link('set', index=index, state='down')
+            netlink.link('set', index=index, ifname=self.name)
+            netlink.link('set', index=index, state='up')
+
+        # Bring up the interface if we're not a monitor port
+        if self.method == InterfaceConfigurationMethods.DHCP:
+            dhcpcd_cmdline = ['dhcpcd', '-w']
+
+            # If we're a oneshot, invoke dhcpcd as a oneshot
+            if oneshot is True:
+                dhcpcd_cmdline += ['-1']
+
+            self.logger.info("Configuring DHCP on %s", self.name)
+            dhcpcd_process = subprocess.run(
+                args=dhcpcd_cmdline, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False)
+
+            # This should rarely if ever happen. If we don't have a DHCP server handy, we'll
+            # end up with a link local access and the client should return. This will only 
+            # happen if IPv4LL fails
+
+            if dhcpcd_process.returncode != 0:
+                self.logger.error("failed to recieve an IP address!")
+                return False
+            return True
+
+        if self.method == InterfaceConfigurationMethods.STATIC:
+            if len(self.static_ipv4_addrs) == 0:
+                raise ValueError("Static configuration, but no addresses set!")
+
+
+            for address in self.static_ipv4_addrs:
+                netlink.addr(
+                    'add',
+                    index=index,
+                    address=address.ip_addr.compressed,
+                    broadcast=address.broadcast.compressed,
+                    prefixlen=int(address.prefixlen)
+                )
+
+        netlink.close()
+
+    def to_dict(self):
+        '''Stored configuration data to dictionary form'''
+        interface_dict = {}
+        interface_dict['name'] = self.name
+        interface_dict['method'] = self.method.value
+
+        # MAC addresses aren't technically configurable, but we cna use them as a relative 
+        # simple UUID to identify each interface and help for matching on the next bringup
+        interface_dict['mac_address'] = self.mac_address
+
+        # If we're statically configured, save our addresses for save/reload
+        v4_addrs = []
+        if self.method == InterfaceConfigurationMethods.STATIC:
+            for static_v4_addr in self.static_ipv4_addrs:
+                v4_addrs.append(static_v4_addr.to_dict())
+
+            interface_dict['v4_addresses'] = v4_addrs
+
+        return interface_dict
+
+    def from_dict(self, interface_dict):
+        '''Restores configuration data from dictionary form'''
+
+        if interface_dict['mac_address'] != self.mac_address:
+            raise ValueError("MAC Address mismatch! Refusing to apply configuration")
+
+        # An interface is considered managed if we load it from a dict
+        self.managed = True
+        self.name = interface_dict['name']
+        self.method = InterfaceConfigurationMethods(interface_dict['method'])
+
+        if self.method == InterfaceConfigurationMethods.STATIC:
+            for v4_addrs in interface_dict['v4_addresses']:
+                self.static_ipv4_addrs.append(
+                    StaticIPv4Address.from_dict(v4_addrs)
+                )
 
 class NetworkConfiguration(object):
 
     '''Holds configuration information for NDR'''
 
-    def __init__(self, ndr_netcfg_config):
+    def __init__(self, ndr_netcfg_config, logger=None):
         self.config = ndr_netcfg_config
-        self.netlink = IPRoute()
         self.raw_ifaces = None
-        self.ifaces = {}
+
+        # Log to a logger if one is manually specified, otherwise to syslog by default
+        if logger is not None:
+            self.logger = logger
+        else:
+            # Setup logging ourselves
+            logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s')
+            logger = logging.getLogger(name=__name__)
+            logger.setLevel(logging.DEBUG)
+
+            # If syslog is available, go there by default
+            if os.path.exists("/dev/log"):
+                logger.propagate = False
+
+                handler = logging.handlers.SysLogHandler(address='/dev/log')
+                handler.ident = os.path.basename(sys.argv[0]) + " " # space required for syslog
+                logger.addHandler(handler)
+
+            self.logger = logger
 
         # Refers to the configuration that we want
-        self.nic_configuration = {}
-        self.refresh()
+        self.nic_configuration = []
+
+        self.load_all_interfaces()
 
         # If the config file exists, load it
-        if os.path.isfile(self.config):
+        if self.config != None:
             self.import_configuration()
 
-    def refresh(self):
-        '''Refreshes the iface table'''
-        self.raw_ifaces = self.netlink.get_links()
-        self.ifaces = {}
 
-        ifaces = {}
-        for raw_iface in self.raw_ifaces:
-            name = raw_iface.get_attr('IFLA_IFNAME')
+    def load_all_interfaces(self):
+        netlink = IPRoute()
+        raw_ifaces = netlink.get_links()
 
-            iface = {}
-            iface['index'] = raw_iface['index']
-            iface['state'] = raw_iface.get_attr('IFLA_OPERSTATE')
-            iface['mac_address'] = raw_iface.get_attr('IFLA_ADDRESS')
-            iface['ip_addresses'] = []
+        # Create a basic interface for each item
+        for raw_iface in raw_ifaces:
+            self.nic_configuration.append(
+                InterfaceConfiguration(
+                    self.logger,
+                    raw_iface.get_attr('IFLA_IFNAME'),
+                    raw_iface.get_attr('IFLA_ADDRESS')
+                )
+            )
 
-            # Get the addrs per interface
-            addrs = self.netlink.get_addr(index=raw_iface['index'])
-            for addr in addrs:
-                ip_addresses = ipaddress.ip_address(
-                    addr.get_attr('IFA_ADDRESS'))
+        # We're done with netlink in this context
+        netlink.close()
 
-                # We probably need to get more info here in the future
-                iface['ip_addresses'].append(ip_addresses)
-            self.ifaces[name] = iface
+        # Now load all the data from the kernel
+        self.refresh_all()
+
+
+    def refresh_all(self):
+        '''Refreshs all network interfaces'''
+
+        for interface in self.nic_configuration:
+            interface.refresh()
 
     def print_interfaces(self):
         '''Dumps the network interfaces to stdout'''
         print("\n=== Linux Network Configuration ===")
 
-        for name, values in self.ifaces.items():
-            print("\nInterface:", name)
-            print("State:", values['state'])
-            print("MAC Address:", values['mac_address'])
+        for interface in self.nic_configuration:
+            print("\nInterface:", interface.current_name)
+            print("State:", interface.state)
+            print("MAC Address:", interface.mac_address)
 
             # Only print addresses if we have them
-            if values['state'] != 'DOWN':
+            if interface.state != 'DOWN':
                 print("Addresses:")
-                for addr in values['ip_addresses']:
+                for addr in interface.current_ip_addresses:
                     print("  ", addr.compressed)
 
-            # Check if we know about this interface
-            if values['mac_address'] in self.nic_configuration:
-                our_cfg = self.nic_configuration[values['mac_address']]
-
+            if interface.managed is True:
                 print("Interface is configured. Settings applied at commit:")
-                if our_cfg['name'] != name:
-                    print("  Rename to:", our_cfg['name'])
+                if interface.current_name != interface.name:
+                    print("  Rename to:", interface.name)
             else:
                 print("Interface is NOT configured for NDR")
 
-    def get_linux_iface_by_mac(self, mac_address):
-        '''Gets the interface dict by MAC address'''
-        for name, values in self.ifaces.items():
-            if values['mac_address'] == mac_address:
-                return name
-
-        return None  # Not found
-
-    def get_nic_config(self, mac_address):
+    def get_nic_config_by_mac_address(self, mac_address):
         '''Retrieves the NIC configuration based on MAC address,
 
         If it's not found, its created automatically'''
 
-        if mac_address not in self.nic_configuration:
-            self.nic_configuration[mac_address] = {}
-            self.nic_configuration[mac_address]['monitor'] = False
-            self.nic_configuration[mac_address]['method'] = "dhcp" # Default to DHCP configuration
+        for interface in self.nic_configuration:
+            if interface.mac_address == mac_address:
+                return interface
 
-        return self.nic_configuration[mac_address]
+        raise ValueError("Interface not found")
 
     def get_nic_config_by_name(self, name):
         '''Retrieves the NIC configuration by interface name.abs
@@ -122,78 +296,69 @@ class NetworkConfiguration(object):
         If its not found, an error is raised as this should only be used for managed
         interfaces'''
 
-        for mac, values in self.nic_configuration.items():
-            if values['name'] == name:
-                return self.nic_configuration[mac]
+        for interface in self.nic_configuration:
+            if interface.name == name:
+                return interface
 
         raise ValueError("Interface not found")
 
     def set_configuration_method(self, interface, method):
         '''Configures how an interface is configured'''
-        if method not in CFG_METHODS:
-            raise ValueError("Unknown configuration method")
 
-        cfg = self.get_nic_config_by_name(interface)
-        cfg['method'] = method
+        interface = self.get_nic_config_by_name(interface)
+        interface.method = method
+
+    def add_v4_addr(self, interface, address, prefixlen, broadcast):
+        '''Add an address to an interface. Static configuration only'''
+        interface = self.get_nic_config_by_name(interface)
+        interface.add_static_v4_addr(address, prefixlen, broadcast)
 
     def rename_interface(self, old_name, new_name):
         '''Updates the configuration dict to the interface name'''
 
-        if old_name not in self.ifaces:
-            raise ValueError("Interface not found!")
-
-        nic = self.get_nic_config(self.ifaces[old_name]['mac_address'])
-        nic['name'] = new_name
+        interface = self.get_nic_config_by_name(old_name)
+        interface.managed = True
+        interface.name = new_name
 
     def apply_configuration(self, oneshot=False):
         '''Applies the configuration from the network dict'''
+        for nic in self.nic_configuration:
+            if nic.managed == True:
+                nic.apply_configuration()
 
-        for nic, values in self.nic_configuration.items():
-            iface_name = self.get_linux_iface_by_mac(nic)
-            iface = self.ifaces[iface_name]
+    def to_yaml(self):
+        '''Exports configuration information as a YAML file'''
+        cfg_dict = {}
+        interface_dicts = []
 
-            if iface_name != values['name']:
-                print("Renaming", iface_name, "to", values['name'])
+        for interface in self.nic_configuration:
+            if interface.managed is True:
+                interface_dicts.append(
+                    interface.to_dict()
+                )
 
-                # Interface must be brought down to rename it
-                self.netlink.link('set', index=iface['index'], state='down')
-                self.netlink.link(
-                    'set', index=iface['index'], ifname=values['name'])
-                self.netlink.link('set', index=iface['index'], state='up')
+        cfg_dict['interfaces'] = interface_dicts
 
-            # Bring up the interface if we're not a monitor port
-            if values['method'] == 'dhcp':
-                dhcpcd_cmdline = ['dhcpcd', '-w']
+        return yaml.dump(cfg_dict)
 
-                # If we're a oneshot, invoke dhcpcd as a oneshot
-                if oneshot is True:
-                    dhcpcd_cmdline += ['-1']
-
-                print("Configuring DHCP on", values['name'])
-                dhcpcd_process = subprocess.run(
-                    args=dhcpcd_cmdline, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    check=False)
-
-                # This should rarely if ever happen. If we don't have a DHCP server handy, we'll
-                # end up with a link local access and the client should return. This will only happen
-                # if IPv4LL fails
-
-                if dhcpcd_process.returncode != 0:
-                    print("failed to recieve an IP address!")
-                    return False
-                return True
-
-            if values['method'] == 'static':
-                pass                    
+    def export_configuration(self):
+        '''Exports configuration information revelant to restore state'''
+        with open(self.config, 'w') as f:
+            f.write(self.to_yaml())
 
     def import_configuration(self):
         with open(self.config, 'r') as f:
-            self.nic_configuration = yaml.safe_load(f.read())
+            nic_dicts = yaml.safe_load(f.read())
 
-    def export_configuration(self):
-        cfg_yaml = yaml.dump(self.nic_configuration)
-        with open(self.config, 'w') as f:
-            f.write(cfg_yaml)
+        if nic_dicts is not None:
+            if "interfaces" in nic_dicts:
+                managed_nics = nic_dicts['interfaces']
+
+                # For each NIC we have the configuration for, load it, then configure it.
+                for nic in managed_nics:
+                    # See if we can find this NIC
+                    actual_nic = self.get_nic_config_by_mac_address(nic['mac_address'])
+                    actual_nic.from_dict(nic)
 
     def interactive_configuration(self):
         '''Interactively reconfigures the network'''
