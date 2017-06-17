@@ -70,11 +70,11 @@ class NetworkConfig(unittest.TestCase):
         nc = ndr_netcfg.NetworkConfiguration(config_file)
         nc.rename_interface("dummy0", "lan127")
         nc.set_configuration_method("lan127", ndr_netcfg.InterfaceConfigurationMethods.STATIC)
-        nc.add_v4_addr("lan127", "10.1.177.2", 24, "10.1.177.255")
+        nc.add_static_addr("lan127", "10.1.177.2", 24)
 
         nc.rename_interface("dummy1", "monitor234")
         nc.set_configuration_method("monitor234", ndr_netcfg.InterfaceConfigurationMethods.STATIC)
-        nc.add_v4_addr("monitor234", "10.2.177.2", 24, "10.2.177.255")
+        nc.add_static_addr("monitor234", "10.2.177.2", 24)
 
         nc.apply_configuration()
         return nc
@@ -159,9 +159,14 @@ class NetworkConfig(unittest.TestCase):
         ip_address_block = lan127_interface.current_ip_addresses[0]
         self.assertEqual(ip_address_block.ip_addr, ipaddress.ip_address("10.1.177.2"))
         self.assertEqual(ip_address_block.prefixlen, 24)
-        self.assertEqual(ip_address_block.broadcast, ipaddress.ip_address("10.1.177.255"))
 
     def test_get_all_managed_interfaces(self):
         '''Makes sure we only return the managed interfaces'''
         nc = self.configure_interfaces()
         self.assertEqual(len(nc.get_all_managed_interfaces()), 2)
+
+    def test_get_ip_network(self):
+        '''Tests the functionality of getting an IP network from an IPAddressConfig'''
+        ip_address_config = ndr_netcfg.IPAddressConfig("192.168.2.4", 24)
+        ipnet = ipaddress.ip_network("192.168.2.0/24")
+        self.assertEqual(ip_address_config.ip_network(), ipnet)

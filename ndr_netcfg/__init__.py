@@ -16,4 +16,7 @@
 # You should have received a copy of the GNU General Public License
 # along with NDR.  If not, see <http://www.gnu.org/licenses/>.
 
-from ndr_netcfg.netcfg import NetworkConfiguration, InterfaceConfigurationMethods
+from ndr_netcfg.netcfg import (NetworkConfiguration,
+                               InterfaceConfigurationMethods,
+                               IPAddressConfig)
+
