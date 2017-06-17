@@ -345,7 +345,7 @@ class NetworkConfiguration(object):
             if interface.state != 'DOWN':
                 print("Addresses:")
                 for addr in interface.current_ip_addresses:
-                    print("  ", addr.compressed)
+                    print("  ", addr.ip_addr)
 
             if interface.managed is True:
                 print("Interface is configured. Settings applied at commit:")
