@@ -24,18 +24,26 @@ import subprocess
 import shlex
 import logging
 import logging.handlers
+from socket import AF_INET, AF_INET6
 
 from enum import Enum
 import yaml
 from pyroute2 import IPRoute
+
+'''Handles network configuration for NDR, as well allowing reporting and gathering of interface
+information for automatically configuring network scan utilities.
+
+This class is not well optimized as it makes multiple RTNetLink socket calls; for our purposes, it
+works well enough for now, but at some point, we should likely rewrite it to use IPDB or at least
+use a single socket per class instance.'''
 
 class InterfaceConfigurationMethods(Enum):
     NONE = 'none'
     DHCP = 'dhcp'
     STATIC = 'static'
 
-class StaticIPv4Address(object):
-    '''Static IP configuration object'''
+class IPv4Address(object):
+    '''IPv4 configuration object'''
     def __init__(self, ip_addr, prefixlen, broadcast):
         self.ip_addr = ipaddress.ip_address(ip_addr)
         self.prefixlen = int(prefixlen)
@@ -53,9 +61,29 @@ class StaticIPv4Address(object):
     @classmethod
     def from_dict(cls, v4_addr_dict):
         '''Creates the Addr object from a dictionary'''
-        return StaticIPv4Address(v4_addr_dict['ip_addr'],
-                                 v4_addr_dict['prefixlen'],
-                                 v4_addr_dict['broadcast'])
+        return IPv4Address(v4_addr_dict['ip_addr'],
+                           v4_addr_dict['prefixlen'],
+                           v4_addr_dict['broadcast'])
+
+class IPv6Address(object):
+    '''IPv6 configuration object'''
+    def __init__(self, ip_addr, prefixlen):
+        self.ip_addr = ipaddress.ip_address(ip_addr)
+        self.prefixlen = int(prefixlen)
+
+    def to_dict(self):
+        '''Prepares an IPv4 address for serialization'''
+        v4_addr_dict = {}
+        v4_addr_dict['ip_addr'] = self.ip_addr.compressed
+        v4_addr_dict['prefixlen'] = self.prefixlen
+
+        return v4_addr_dict
+
+    @classmethod
+    def from_dict(cls, v6_addr_dict):
+        '''Creates the Addr object from a dictionary'''
+        return IPv6Address(v6_addr_dict['ip_addr'],
+                           v6_addr_dict['prefixlen'])
 
 class InterfaceConfiguration(object):
     '''Holds information relating to the interfaces configured by ndr-netcfg'''
@@ -89,18 +117,80 @@ class InterfaceConfiguration(object):
                 # Get the addrs per interface
                 addrs = netlink.get_addr(index=index)
                 for addr in addrs:
-                    ip_addresses = ipaddress.ip_address(
+                    nic_ip_address = ipaddress.ip_address(
                         addr.get_attr('IFA_ADDRESS'))
 
-                    # We probably need to get more info here in the future
-                    self.current_ip_addresses.append(ip_addresses)
+                    # Getting the netmask is somewhat more involved unfortunately. Under Linux
+                    # the netmask is NOT stored with the interface, but in the routing table
+                    # which is not connected to the interface at all. We need the netmask
+                    # to know which hosts we can see on a level 2 segment scan with nmap, as well
+                    # as what we should expect to see on a ND probe with NMAP.
+
+                    # To do this, we need to pull the network routing table, and walk it. For every
+                    # configured IP address, we'll find multiple routing entries:
+                    #
+                    # The first will be a /32 (v4) or /128 (v6) referring to ourselves so that
+                    # loopback works. We'll also find a broadcast route like this
+                    #
+                    # Secondly, we'll also have one entry per gateway with a dst_len of 0. We'll
+                    # ignore these as these are global and not per interface
+                    #
+                    # Thirdly, we'll have our network and it's netmask
+                    #
+                    # Routing table entries have a preferred src (PREFSRC) value which may or may
+                    # not be set saying which IP is preferred when using this route. This is a 
+                    # trap, we can't use this value because in multihoming scenarios, this won't
+                    # get the information we want
+
+                    if nic_ip_address.version == 4:
+                        self_prefixlen = 32
+                        routing_table = netlink.get_routes(family=AF_INET)
+                    else: # v6
+                        self_prefixlen = 128
+                        routing_table = netlink.get_routes(family=AF_INET6)
+
+                    for route in routing_table:
+                        # Filter out gateway routes
+                        if route.get_attr('RTA_GATEWAY') is not None:
+                            continue
+
+                        if 'dst_len' not in route:
+                            continue
+
+                        dst_len = route['dst_len']
+                        if dst_len == self_prefixlen or dst_len == 0:
+                            continue # Self or default
+
+                        # Filter out the network if its a self address, or len of 0
+                        rta_dst = route.get_attr('RTA_DST')
+                        if rta_dst is None:
+                            continue
+
+                        rta_dst += "/" + str(dst_len)
+                        route_ipnet = ipaddress.ip_network(rta_dst, strict=True)
+
+                        # Filter out link local addresses
+                        if route_ipnet.is_link_local:
+                            continue
+
+                        if nic_ip_address in route_ipnet:
+                            # We've got a winner!
+                            #print("Got network match. Interface", self.name, " ", str(rta_dst))
+
+                            # Create an IP address object and store it
+                            if nic_ip_address == 4:
+                                ip_obj = IPv4Address(str(nic_ip_address), dst_len, addr.get_attr('IFA_BROADCAST'))
+                            else:
+                                ip_obj = IPv6Address(str(nic_ip_address), dst_len)
+
+                            self.current_ip_addresses.append(ip_obj)
 
         # And clean up after ourselves
         netlink.close()
 
     def add_static_v4_addr(self, ip_addr, prefixlen, broadcast):
         '''Adds a static IPv4 address to this interface'''
-        static_addr = StaticIPv4Address(ip_addr, prefixlen, broadcast)
+        static_addr = IPv4Address(ip_addr, prefixlen, broadcast)
         self.static_ipv4_addrs.append(static_addr)
 
     def apply_configuration(self, oneshot=False):
@@ -156,6 +246,9 @@ class InterfaceConfiguration(object):
 
         netlink.close()
 
+        # Refresh ourselves
+        self.refresh()
+
     def to_dict(self):
         '''Stored configuration data to dictionary form'''
         interface_dict = {}
@@ -190,7 +283,7 @@ class InterfaceConfiguration(object):
         if self.method == InterfaceConfigurationMethods.STATIC:
             for v4_addrs in interface_dict['v4_addresses']:
                 self.static_ipv4_addrs.append(
-                    StaticIPv4Address.from_dict(v4_addrs)
+                    IPv4Address.from_dict(v4_addrs)
                 )
 
 class NetworkConfiguration(object):
