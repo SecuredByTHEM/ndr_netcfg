@@ -179,6 +179,13 @@ class InterfaceConfiguration(object):
 
                             # Create an IP address object and store it
                             if nic_ip_address.version == 4:
+                                # Travis debugging
+                                if addr.get_attr('IFA_BROADCAST') is None:
+                                    print("Debugging null broadcast interface on ", self.name)
+                                    import pprint
+                                    pprint(addr)
+
+
                                 ip_obj = IPv4Address(str(nic_ip_address), dst_len, addr.get_attr('IFA_BROADCAST'))
                             else:
                                 ip_obj = IPv6Address(str(nic_ip_address), dst_len)
@@ -379,7 +386,7 @@ class NetworkConfiguration(object):
         for interface in self.nic_configuration:
             if interface.managed is True:
                 managed_interfaces.append(interface)
-        
+
         return managed_interfaces
 
     def get_nic_config_by_mac_address(self, mac_address):
