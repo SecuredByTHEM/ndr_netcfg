@@ -193,7 +193,7 @@ class InterfaceConfiguration(object):
 
         # Bring up the interface if we're not a monitor port
         if self.method == InterfaceConfigurationMethods.DHCP:
-            dhcpcd_cmdline = ['dhcpcd', '-w']
+            dhcpcd_cmdline = ['dhcpcd', '-w', '-D']
 
             # If we're a oneshot, invoke dhcpcd as a oneshot
             if oneshot is True:
