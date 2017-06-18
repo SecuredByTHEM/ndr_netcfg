@@ -301,7 +301,7 @@ class NetworkConfiguration(object):
         self.load_all_interfaces()
 
         # If the config file exists, load it
-        if self.config != None:
+        if self.config != None and os.path.exists(self.config):
             self.import_configuration()
 
 
@@ -402,7 +402,12 @@ class NetworkConfiguration(object):
         '''Updates the configuration dict to the interface name'''
 
         interface = self.get_nic_config_by_name(old_name)
+
+        # This isn't the right place for this, but I'm not sure
+        # what is the correct one right now
         interface.managed = True
+        interface.method = InterfaceConfigurationMethods.DHCP
+
         interface.name = new_name
 
     def apply_configuration(self, oneshot=False):
