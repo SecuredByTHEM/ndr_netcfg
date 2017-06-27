@@ -193,11 +193,14 @@ class InterfaceConfiguration(object):
 
         # Bring up the interface if we're not a monitor port
         if self.method == InterfaceConfigurationMethods.DHCP:
-            dhcpcd_cmdline = ['dhcpcd', '-w', '-D']
+            dhcpcd_cmdline = ['dhcpcd', '-w', '-D', '--inactive']
 
             # If we're a oneshot, invoke dhcpcd as a oneshot
             if oneshot is True:
                 dhcpcd_cmdline += ['-1']
+
+            # Add the interface name
+            dhcpcd_cmdline += self.name
 
             self.logger.info("Configuring DHCP on %s", self.name)
             dhcpcd_process = subprocess.run(
