@@ -200,7 +200,7 @@ class InterfaceConfiguration(object):
                 dhcpcd_cmdline += ['-1']
 
             # Add the interface name
-            dhcpcd_cmdline += self.name
+            dhcpcd_cmdline += [self.name]
 
             self.logger.info("Configuring DHCP on %s", self.name)
             dhcpcd_process = subprocess.run(
