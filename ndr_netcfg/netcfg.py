@@ -390,6 +390,18 @@ class NetworkConfiguration(object):
 
         raise ValueError("Interface not found")
 
+    def retrieve_home_ip_networks(self):
+        '''Retrieves all the IP addresses that can be considered 'home' for use in SNORT'''
+
+        ip_networks = []
+        for interface in self.nic_configuration:
+            for ip_address in interface.current_ip_addresses:
+                ip_net = ip_address.ip_network()
+                if ip_net not in ip_networks:
+                    ip_networks.append(ip_net)
+
+        return ip_networks
+
     def set_configuration_method(self, interface, method):
         '''Configures how an interface is configured'''
 

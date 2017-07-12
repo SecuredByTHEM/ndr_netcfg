@@ -170,3 +170,18 @@ class NetworkConfig(unittest.TestCase):
         ip_address_config = ndr_netcfg.IPAddressConfig("192.168.2.4", 24)
         ipnet = ipaddress.ip_network("192.168.2.0/24")
         self.assertEqual(ip_address_config.ip_network(), ipnet)
+
+    def test_get_all_ip_networks(self):
+        '''Tests that we can find and retrieve all IP networks'''
+        nc = self.configure_interfaces()
+
+        ip_nets = nc.retrieve_home_ip_networks()
+
+        ip_net1 = ipaddress.ip_network('10.1.177.0/24')
+        ip_net2 = ipaddress.ip_network('10.1.177.0/24')
+
+        # We'll see localhost here, as well as any unmanaged interfaces so this is the best that
+        # we can hope to do for testing this function.
+
+        self.assertIn(ip_net1, ip_nets)
+        self.assertIn(ip_net2, ip_nets)
