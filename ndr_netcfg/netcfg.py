@@ -406,6 +406,7 @@ class NetworkConfiguration(object):
         '''Configures how an interface is configured'''
 
         interface = self.get_nic_config_by_name(interface)
+        interface.managed = True
         interface.method = method
 
     def add_static_addr(self, interface, address, prefixlen):
